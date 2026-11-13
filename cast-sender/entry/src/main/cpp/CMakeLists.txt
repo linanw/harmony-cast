@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.5.0)
+project(HarmonyCastSender)
+set(CMAKE_CXX_STANDARD 17)
+add_library(cast SHARED cast.cpp)
+target_link_libraries(cast PUBLIC libace_napi.z.so libnative_avscreen_capture.so libnative_media_venc.so libnative_media_core.so libnative_media_codecbase.so libnative_window.so)

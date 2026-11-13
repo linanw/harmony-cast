@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=鸿蒙无线投屏
+Comment=在 Linux 上接收 Miracast 屏幕镜像
+Exec=/usr/local/bin/harmony-cast
+Icon=video-display
+Terminal=false
+Categories=AudioVideo;Video;

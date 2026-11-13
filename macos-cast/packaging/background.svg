@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#F7FBFF"/><stop offset="1" stop-color="#EDF3FA"/></linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#1163DD"/><stop offset="1" stop-color="#24CADA"/></linearGradient>
+  </defs>
+  <path d="M0 0h720v440H0z" fill="url(#paper)"/>
+  <path d="M0 0h720v5H0z" fill="url(#bar)"/>
+  <g font-family="Noto Sans CJK SC, sans-serif" text-anchor="middle">
+    <text x="360" y="68" font-size="30" font-weight="700" fill="#172C4A">鸿蒙投屏</text>
+    <text x="360" y="105" font-size="15" fill="#5D708A">将左侧应用拖入右侧 Applications 文件夹</text>
+    <text x="360" y="370" font-size="14" fill="#60748D">安装后打开应用，在平板上点选这台 Mac 即可投屏</text>
+    <text x="360" y="402" font-size="12" fill="#8190A3">Apple Silicon · macOS 14+</text>
+  </g>
+  <g fill="none" stroke="#498CE8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M326 216h68m-17-17 17 17-17 17"/>
+  </g>
+</svg>

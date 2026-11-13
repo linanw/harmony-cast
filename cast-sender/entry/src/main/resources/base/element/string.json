@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Count taps"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Count taps"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Tap Counter"
+    }
+  ]
+}

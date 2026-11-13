@@ -1,0 +1,238 @@
+#!/usr/bin/python3
+"""Privileged Wi-Fi Direct session. The desktop and media player run separately."""
+
+import fcntl
+import ipaddress
+import json
+import os
+import re
+import selectors
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV = {"PATH": PATH, "LC_ALL": "C", "HOME": "/root"}
+BUS = "org.freedesktop.miracle.wifi"
+
+
+def command(*args, check=True, timeout=10):
+    result = subprocess.run(
+        args, env=ENV, capture_output=True, text=True, check=check, timeout=timeout,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def report(line):
+    try:
+        print(line, flush=True)
+    except BrokenPipeError:
+        # A closed desktop log must not prevent network restoration.
+        pass
+
+
+def status(state):
+    report(f"@cast {state}")
+
+
+def shutdown(processes):
+    for process in reversed(processes):
+        # Include any Wi-Fi Direct DHCP or supplicant children.
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=4)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+
+
+def receive(interface):
+    index = socket.if_nametoindex(interface)
+    if not os.path.isdir(f"/sys/class/net/{interface}/wireless") and not os.path.exists(
+        f"/sys/class/net/{interface}/phy80211"
+    ):
+        raise RuntimeError("请选择无线网卡。")
+
+    if command("busctl", "status", BUS, check=False):
+        raise RuntimeError("已有 MiracleCast 服务正在使用无线网卡。")
+
+    managed = command("nmcli", "-g", "GENERAL.NM-MANAGED", "device", "show", interface)
+    profile = command("nmcli", "-g", "GENERAL.CON-UUID", "device", "show", interface)
+    restore = managed == "yes"
+    processes = []
+    with selectors.DefaultSelector() as selector:
+        selector.register(sys.stdin, selectors.EVENT_READ)
+
+        def stopped(delay=0):
+            # The desktop closes the control pipe on Stop or when it exits.
+            return bool(selector.select(delay))
+
+        def start(*args, capture=False):
+            process = subprocess.Popen(
+                args, env=ENV, stdin=subprocess.DEVNULL, start_new_session=True,
+                stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.STDOUT if capture else None,
+            )
+            processes.append(process)
+            return process
+
+        try:
+            status("starting")
+            if restore:
+                command("nmcli", "device", "set", interface, "managed", "no")
+
+            start("miracle-wifid", "--interface", interface, "--go-intent", "15", "--use-dev")
+            link = f"/org/freedesktop/miracle/wifi/link/{bus_label(str(index))}"
+            prop = ("busctl", "get-property", BUS, link, BUS + ".Link")
+            control = ("wpa_cli", "-g", f"/run/miracle/wifi/{interface}-{index}.global")
+            deadline = time.monotonic() + 15
+            controller = None
+            controller_fd = None
+            pending = b""
+
+            def controller_lines():
+                nonlocal pending
+                try:
+                    pending += os.read(controller_fd, 16384)
+                except BlockingIOError:
+                    return
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line = line.decode("utf-8", errors="replace")
+                    report(line)
+                    yield line
+
+            ready = False
+            while not stopped(0.2):
+                for process in processes:
+                    if process.poll() is not None:
+                        raise RuntimeError(f"{process.args[0]} 已退出（{process.returncode}）。")
+                if controller is not None:
+                    for line in controller_lines():
+                        if line.startswith("now running on peer "):
+                            peer = line.rsplit(" ", 1)[-1]
+                            address = peer_address(peer, index)
+                            if address:
+                                status(f"peer {address}")
+                            else:
+                                report("无法读取 Wi-Fi Direct 本地地址。")
+                        elif line.startswith("SINK set resolution "):
+                            status(f"streaming {line.rsplit(' ', 1)[-1]}")
+                        elif "SINK disconnected" in line or line.startswith((
+                            "no longer running on peer ", "no longer waiting for peer ", "[FAIL]", "[TIMEOUT]",
+                        )):
+                            status("disconnected")
+                if ready:
+                    continue
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("无线网卡未能启动 Wi-Fi Direct 广播。")
+                if controller is None:
+                    # Managed is published before wpa_supplicant finishes setup.
+                    # Wi-Fi Display becomes enabled after MiracleCast has issued
+                    # its initial P2P settings, including its legacy 5 GHz ban.
+                    supplicant = command(*control, "status", check=False)
+                    if "wifi_display=1" in supplicant.splitlines():
+                        reply = command(*control, "p2p_set", "disallow_freq", "")
+                        if reply != "OK":
+                            raise RuntimeError("无线网卡无法启用自动频段协商。")
+                        command("busctl", "set-property", BUS, link, BUS + ".Link",
+                                "FriendlyName", "s", socket.gethostname()[:32])
+                        controller = start(
+                            "stdbuf", "-oL", "-eL", "miracle-sinkctl", "--audio", "1",
+                            "--external-player", "/usr/bin/true", "run", str(index), capture=True,
+                        )
+                        controller_fd = controller.stdout.fileno()
+                        os.set_blocking(controller_fd, False)
+                else:
+                    if command(*prop, "P2PScanning", check=False) == "b true":
+                        # Reapply after the daemon's asynchronous setup completes.
+                        if command(*control, "p2p_set", "disallow_freq", "") != "OK":
+                            raise RuntimeError("无线网卡无法启用自动频段协商。")
+                        ready = True
+                        status("ready")
+                    else:
+                        command("busctl", "set-property", BUS, link, BUS + ".Link",
+                                "P2PScanning", "b", "true", check=False)
+        finally:
+            try:
+                shutdown(processes)
+            finally:
+                if restore:
+                    status("restoring")
+                    command("nmcli", "device", "set", interface, "managed", "yes")
+                    if re.fullmatch(r"[0-9a-f-]{36}", profile):
+                        restore_connection(interface, profile)
+
+
+def restore_connection(interface, profile):
+    # NetworkManager can need time to reattach its supplicant after the handoff.
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        current = command("nmcli", "-g", "GENERAL.CON-UUID", "device", "show", interface)
+        state = command("nmcli", "-g", "GENERAL.STATE", "device", "show", interface)
+        if current == profile and state.split(maxsplit=1)[0] == "100":
+            return
+        if state.split(maxsplit=1)[0] in {"30", "100", "120"}:
+            break
+        time.sleep(0.25)
+    command("nmcli", "--wait", "12", "connection", "up", "uuid",
+            profile, "ifname", interface, timeout=15)
+
+
+def bus_label(value):
+    # Match systemd's sd_bus_path_encode for link and peer labels.
+    return "".join(
+        char if char.isalpha() or (position and char.isdigit()) else f"_{ord(char):02x}"
+        for position, char in enumerate(value)
+    )
+
+
+def peer_address(peer, index):
+    if not re.fullmatch(rf"(?:[0-9a-f]{{2}}:){{5}}[0-9a-f]{{2}}@{index}", peer):
+        return None
+    path = f"/org/freedesktop/miracle/wifi/peer/{bus_label(peer)}"
+    value = command("busctl", "--json=short", "get-property", BUS, path,
+                    BUS + ".Peer", "LocalAddress", check=False)
+    if value:
+        try:
+            return ipaddress.IPv4Address(json.loads(value)["data"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    return None
+
+
+def interrupted(_signal, _frame):
+    raise KeyboardInterrupt
+
+
+def main():
+    if os.geteuid() != 0 or len(sys.argv) != 2 or not re.fullmatch(
+        r"[A-Za-z0-9_.-]{1,15}", sys.argv[1]
+    ):
+        sys.exit("需要管理员权限和有效的无线网卡名称。")
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
+    try:
+        with open("/run/harmony-cast.lock", "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            receive(sys.argv[1])
+    except BlockingIOError:
+        sys.exit("已有投屏接收会话。")
+    except KeyboardInterrupt:
+        pass
+    except subprocess.CalledProcessError as error:
+        sys.exit(error.stderr.strip() or str(error))
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        sys.exit(str(error))
+
+
+if __name__ == "__main__":
+    main()

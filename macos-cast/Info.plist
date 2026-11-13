@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Harmony Cast</string>
+  <key>CFBundleDisplayName</key><string>鸿蒙投屏</string>
+  <key>CFBundleIdentifier</key><string>me.harmony.cast.macos</string>
+  <key>CFBundleExecutable</key><string>HarmonyCast</string>
+  <key>CFBundleIconFile</key><string>HarmonyCast.icns</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>CFBundleVersion</key><string>5</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocalNetworkUsageDescription</key><string>接收同一局域网内鸿蒙设备的投屏画面。</string>
+  <key>NSBonjourServices</key><array><string>_harmonycast._tcp</string></array>
+</dict></plist>
